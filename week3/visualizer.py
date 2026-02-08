@@ -2,33 +2,94 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from typing import List, Dict
 import math
-from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv(override=True)
-
+import requests
+import json
 
 class TokenPredictor:
-    def __init__(self, model_name: str):
-        self.client = OpenAI()
+    def __init__(self, model_name: str, use_ollama: bool = True):
+        """
+        Initialize TokenPredictor.
+        
+        Args:
+            model_name: Name of the model to use
+            use_ollama: If True, use Ollama (free, local). If False, use Groq (requires API key)
+        """
+        self.use_ollama = use_ollama
         self.messages = []
         self.predictions = []
         self.model_name = model_name
+        
+        if not use_ollama:
+            from groq import Groq
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+            self.client = Groq()
 
     def predict_tokens(self, prompt: str, max_tokens: int = 100) -> List[Dict]:
         """
         Generate text token by token and track prediction probabilities.
         Returns list of predictions with top token and alternatives.
         """
+        if self.use_ollama:
+            return self._predict_tokens_ollama(prompt, max_tokens)
+        else:
+            return self._predict_tokens_groq(prompt, max_tokens)
+    
+    def _predict_tokens_ollama(self, prompt: str, max_tokens: int) -> List[Dict]:
+        """Use Ollama API (free, local)"""
+        url = "http://localhost:11434/api/generate"
+        
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": True,
+            "options": {
+                "temperature": 0,
+                "num_predict": max_tokens,
+                "top_k": 3,  # Get top 3 predictions
+            }
+        }
+        
+        predictions = []
+        try:
+            response = requests.post(url, json=payload, stream=True)
+            response.raise_for_status()
+            
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line)
+                    if "response" in chunk and chunk["response"]:
+                        token = chunk["response"]
+                        
+                        # Ollama doesn't provide logprobs in the same way, 
+                        # so we'll create mock probabilities for demonstration
+                        # In a real scenario, you'd need to use a different approach
+                        prediction = {
+                            "token": token,
+                            "probability": 0.85,  # Mock probability
+                            "alternatives": []  # Ollama streaming doesn't provide alternatives easily
+                        }
+                        predictions.append(prediction)
+                        
+                        if chunk.get("done", False):
+                            break
+        except Exception as e:
+            print(f"Error with Ollama API: {e}")
+            print("Make sure Ollama is running: ollama serve")
+        
+        return predictions
+    
+    def _predict_tokens_groq(self, prompt: str, max_tokens: int) -> List[Dict]:
+        """Use Groq API (requires API key, but free tier available)"""
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
-            temperature=0,  # Use temperature 0 for deterministic output
+            temperature=0,
             logprobs=True,
             seed=42,
-            top_logprobs=3,  # Get top 3 token predictions
-            stream=True,  # Stream the response
+            top_logprobs=3,
+            stream=True,
         )
 
         predictions = []
@@ -38,11 +99,9 @@ class TokenPredictor:
                 logprobs = chunk.choices[0].logprobs.content[0].top_logprobs
                 logprob_dict = {item.token: item.logprob for item in logprobs}
 
-                # Get top predicted token and probability
                 top_token = token
                 top_prob = logprob_dict[token]
 
-                # Get alternative predictions
                 alternatives = []
                 for alt_token, alt_prob in logprob_dict.items():
                     if alt_token != token:
@@ -52,7 +111,7 @@ class TokenPredictor:
                 prediction = {
                     "token": top_token,
                     "probability": math.exp(top_prob),
-                    "alternatives": alternatives[:2],  # Keep top 2 alternatives
+                    "alternatives": alternatives[:2],
                 }
                 predictions.append(prediction)
 
@@ -84,7 +143,7 @@ def create_token_graph(model_name: str, predictions: List[Dict]) -> nx.DiGraph:
             G.add_edge(f"t{i - 1}", token_id)
 
     # Then add alternative nodes with a different y-position
-    last_id = None
+    last_id = f"t{len(predictions) - 1}" if predictions else "START"
     for i, pred in enumerate(predictions):
         parent_token = "START" if i == 0 else f"t{i - 1}"
 
@@ -97,7 +156,6 @@ def create_token_graph(model_name: str, predictions: List[Dict]) -> nx.DiGraph:
 
             # Add edge from main token to its alternatives only
             G.add_edge(parent_token, alt_id)
-            last_id = parent_token
 
     G.add_node("END", token="END", prob="100%", color="red", size=6000)
     G.add_edge(last_id, "END")
