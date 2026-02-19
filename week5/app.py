@@ -9,7 +9,9 @@ load_dotenv(override=True)
 def format_context(context):
     result = "<h2 style='color: #ff7800;'>Relevant Context</h2>\n\n"
     for doc in context:
-        result += f"<span style='color: #ff7800;'>Source: {doc.metadata['source']}</span>\n\n"
+        result += (
+            f"<span style='color: #ff7800;'>Source: {doc.metadata['source']}</span>\n\n"
+        )
         result += doc.page_content + "\n\n"
     return result
 
@@ -34,7 +36,10 @@ def main():
         with gr.Row():
             with gr.Column(scale=1):
                 chatbot = gr.Chatbot(
-                    label="💬 Conversation", height=600, type="messages", show_copy_button=True
+                    label="💬 Conversation",
+                    height=600,
+                    type="messages",
+                    show_copy_button=True,
                 )
                 message = gr.Textbox(
                     label="Your Question",
@@ -51,7 +56,9 @@ def main():
                 )
 
         message.submit(
-            put_message_in_chatbot, inputs=[message, chatbot], outputs=[message, chatbot]
+            put_message_in_chatbot,
+            inputs=[message, chatbot],
+            outputs=[message, chatbot],
         ).then(chat, inputs=chatbot, outputs=[chatbot, context_markdown])
 
     ui.launch(inbrowser=True)
